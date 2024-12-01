@@ -20,8 +20,8 @@ class Settings(BaseSettings):
     NIGHT_START_HOURS: list[int] = [18, 20]  # 24 hour format in your timezone
     NIGHT_END_HOURS: list[int] = [3, 5]  # 24 hour format in your timezone
     ADDITIONAL_NIGHT_SLEEP_MINUTES: list[int] = [2, 45]  # in minutes
-    ROUND_START_TIME_DELTA_MINUTES: int = 30  # in minutes
-    ROUND_END_TIME_DELTA_MINUTES: int = 10  # in minutes
+    ROUND_START_TIME_DELTA_MINUTES: int = 43  # in minutes
+    ROUND_END_TIME_DELTA_MINUTES: int = 11  # in minutes
 
     CLAIM_PX: bool = True
     UPGRADE_BOOSTS: bool = True

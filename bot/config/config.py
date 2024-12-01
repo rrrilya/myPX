@@ -30,6 +30,6 @@ class Settings(BaseSettings):
     PARTICIPATE_IN_TOURNAMENT: bool = True
     COMPLETE_QUESTS: bool = True
     COMPLETE_DANGER_TASKS: bool = False
-    WATCH_ADS: bool = False
+    WATCH_ADS: bool = True
 
 settings = Settings()  # type: ignore

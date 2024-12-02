@@ -1,5 +1,6 @@
 import asyncio
 import io
+import json
 import random
 import re
 import sys
@@ -10,6 +11,7 @@ from time import time
 from typing import Any, Dict, List, NoReturn
 from uuid import uuid4
 
+import aiofiles
 import aiohttp
 import cv2
 import numpy as np
@@ -293,19 +295,13 @@ class NotPXBot:
             settings.PAINT_PIXELS and is_after_start_time and is_before_end_time
         )
 
+        template_available = await self._check_tournament_my(session)
+
+        if not template_available:
+            await self._set_tournament_template(session, auth_url)
+
         if should_paint_pixels:
-            template_available = await self._check_tournament_my(session)
-            if not template_available:
-                await self._set_tournament_template(session, auth_url)
-                template_available = await self._check_tournament_my(session)
-                if not template_available:
-                    logger.error(
-                        f"{self.session_name} | Could not set tournament template."
-                    )
-                else:
-                    await self._paint_pixels(session)
-            else:
-                await self._paint_pixels(session)
+            await self._paint_pixels(session)
 
         if settings.CLAIM_PX:
             await self._claim_px(session)
@@ -319,6 +315,8 @@ class NotPXBot:
         if settings.WATCH_ADS:
             await self._watch_ads(session)
 
+        await self._get_tournament_results(session, auth_url)
+
         logger.info(f"{self.session_name} | All done | Balance: {self.balance}")
 
         return next_iteration_sleep_time
@@ -331,12 +329,29 @@ class NotPXBot:
         end_night_time = randint(
             settings.NIGHT_END_HOURS[0], settings.NIGHT_END_HOURS[1]
         )
-        if start_night_time <= current_hour <= end_night_time:
+
+        is_night_time = (
+            (start_night_time <= current_hour <= 23)
+            or (0 <= current_hour <= end_night_time)
+            if start_night_time > end_night_time
+            else (start_night_time <= current_hour <= end_night_time)
+        )
+
+        if is_night_time:
             random_minutes_to_sleep_time = randint(
                 settings.ADDITIONAL_NIGHT_SLEEP_MINUTES[0],
                 settings.ADDITIONAL_NIGHT_SLEEP_MINUTES[1],
             )
-            sleep_time_in_hours = end_night_time - current_hour
+
+            sleep_time_in_hours = None
+
+            if start_night_time <= current_hour <= 23:
+                sleep_time_in_hours = 24 - current_hour + end_night_time
+            elif 0 <= current_hour <= end_night_time:
+                sleep_time_in_hours = end_night_time - current_hour
+            else:
+                return
+
             logger.info(
                 f"{self.session_name} | It's night time. Sleeping for: {int(sleep_time_in_hours)} hours and {random_minutes_to_sleep_time} minutes"
             )
@@ -598,7 +613,7 @@ class NotPXBot:
                 headers=self._headers["notpx"],
                 ssl=settings.ENABLE_SSL,
             )
-            if response.status == 404:
+            if response.status == 409 or response.status == 404:
                 return False
             elif response.status == 200:
                 response_json = await response.json()
@@ -849,13 +864,38 @@ class NotPXBot:
                     canvas_y = self.template_y + ty
                     pixels_to_paint.append((tx, ty, canvas_x, canvas_y))
 
-            while self._charges > 0:
-                random.shuffle(pixels_to_paint)
+            if settings.USE_ALL_CHARGES:
+                while self._charges > 0:
+                    random.shuffle(pixels_to_paint)
+                    for tx, ty, canvas_x, canvas_y in pixels_to_paint:
+                        if self._charges <= 0:
+                            break
+                        canvas_array = self._canvas_renderer.get_canvas
+                        canvas_2d = canvas_array.reshape(
+                            (
+                                self._canvas_renderer.CANVAS_SIZE,
+                                self._canvas_renderer.CANVAS_SIZE,
+                                4,
+                            )
+                        )
+                        template_pixel = template_2d[ty, tx]
+                        canvas_pixel = canvas_2d[canvas_y, canvas_x]
+                        if not np.array_equal(template_pixel[:3], canvas_pixel[:3]):
+                            await self._paint_pixel(
+                                session=session,
+                                canvas_x=canvas_x,
+                                canvas_y=canvas_y,
+                                template_pixel=template_pixel,
+                            )
 
+                            await asyncio.sleep(random.uniform(0.6, 1.2))
+
+                    await asyncio.sleep(random.uniform(0.6, 1.2))
+            else:
+                random.shuffle(pixels_to_paint)
                 for tx, ty, canvas_x, canvas_y in pixels_to_paint:
                     if self._charges <= 0:
                         break
-
                     canvas_array = self._canvas_renderer.get_canvas
                     canvas_2d = canvas_array.reshape(
                         (
@@ -864,10 +904,8 @@ class NotPXBot:
                             4,
                         )
                     )
-
                     template_pixel = template_2d[ty, tx]
                     canvas_pixel = canvas_2d[canvas_y, canvas_x]
-
                     if not np.array_equal(template_pixel[:3], canvas_pixel[:3]):
                         await self._paint_pixel(
                             session=session,
@@ -877,9 +915,6 @@ class NotPXBot:
                         )
 
                         await asyncio.sleep(random.uniform(0.6, 1.2))
-
-                    await asyncio.sleep(0.01)
-
         except Exception:
             if attempts <= 3:
                 logger.warning(
@@ -1013,6 +1048,54 @@ class NotPXBot:
                 f"{self.session_name} | Max retry attempts reached while completing tasks"
             )
 
+    async def _get_tournament_results(
+        self,
+        session: aiohttp.ClientSession,
+        auth_url: str,
+        attempts: int = 1,
+    ) -> None:
+        try:
+            plausible_payload = await self._create_plausible_payload(
+                u="https://app.notpx.app/tournament"
+            )
+            await self._send_plausible_event(session, plausible_payload)
+
+            response = await session.get(
+                "https://notpx.app/api/v1/tournament/user/results",
+                headers=self._headers["notpx"],
+                ssl=settings.ENABLE_SSL,
+            )
+            response.raise_for_status()
+            response_json = await response.json()
+
+            first_round = response_json.get("rounds", [{}])[0]
+            player_rank = first_round.get("rank", None)
+            template_rank = first_round.get("template", {}).get("rank", None)
+            logger.info(
+                f"{self.session_name} | Player rank: {player_rank} | Template rank: {template_rank}"
+            )
+
+            plausible_payload = await self._create_plausible_payload(u=auth_url)
+            await self._send_plausible_event(session, plausible_payload)
+        except Exception:
+            plausible_payload = await self._create_plausible_payload(u=auth_url)
+            await self._send_plausible_event(session, plausible_payload)
+
+            if attempts <= 3:
+                logger.warning(
+                    f"{self.session_name} | Failed to get tournament results, retrying in {self.RETRY_DELAY} seconds | Attempts: {attempts}"
+                )
+                await asyncio.sleep(self.RETRY_DELAY)
+                await self._get_tournament_results(
+                    session=session,
+                    auth_url=auth_url,
+                    attempts=attempts + 1,
+                )
+
+            raise Exception(
+                f"{self.session_name} | Max retry attempts reached while getting tournament results"
+            )
+
     async def _set_tournament_template(
         self, session: aiohttp.ClientSession, auth_url: str, attempts: int = 1
     ) -> None:
@@ -1022,15 +1105,33 @@ class NotPXBot:
             )
             await self._send_plausible_event(session, plausible_payload)
 
+            async with aiofiles.open("templates_pool.json", "r") as file:
+                templates_pool = json.loads(await file.read())
+                template_ids = templates_pool.get("ids")
+
+            if not template_ids:
+                random_templates = await session.get(
+                    "https://notpx.app/api/v1/tournament/template/list/random?limit=16",
+                    headers=self._headers["notpx"],
+                    ssl=settings.ENABLE_SSL,
+                )
+                random_templates.raise_for_status()
+                random_templates_json = await random_templates.json()
+
+                random_template = random.choice(random_templates_json.get("list", []))
+                template_id = random_template.get("id")
+            else:
+                template_id = random.choice(template_ids)
+
             response = await session.put(
-                f"https://notpx.app/api/v1/tournament/template/subscribe/{settings.TOURNAMENT_TEMPLATE_ID}",
+                f"https://notpx.app/api/v1/tournament/template/subscribe/{template_id}",
                 headers=self._headers["notpx"],
                 ssl=settings.ENABLE_SSL,
             )
             response.raise_for_status()
 
             logger.info(
-                f"{self.session_name} | Set tournament template | Template ID: {settings.TOURNAMENT_TEMPLATE_ID}"
+                f"{self.session_name} | Set tournament template | Template ID: {template_id}"
             )
 
             plausible_payload = await self._create_plausible_payload(u=auth_url)
@@ -1165,11 +1266,12 @@ class NotPXBot:
 
             all_periods = response_json.get("allPeriods")
 
-            for period in all_periods:
-                if period.get("PeriodType") == "round":
-                    return period
+            round_periods = [
+                period for period in all_periods if period.get("PeriodType") == "round"
+            ]
+            round_periods.sort(key=lambda p: p.get("EndTime", ""), reverse=True)
 
-            return None
+            return round_periods[0] if round_periods else None
         except Exception:
             if attempts <= 3:
                 logger.warning(

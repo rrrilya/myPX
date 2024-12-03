@@ -16,7 +16,7 @@ class Settings(BaseSettings):
     REF_ID: str = ""  # It would be great if you didn't change it, but I'm not stopping you
     TOURNAMENT_TEMPLATE_ID: int = 1480112288
 
-    SLEEP_AT_NIGHT: bool = True
+    SLEEP_AT_NIGHT: bool = False
     NIGHT_START_HOURS: list[int] = [18, 20]  # 24 hour format in your timezone
     NIGHT_END_HOURS: list[int] = [3, 5]  # 24 hour format in your timezone
     ADDITIONAL_NIGHT_SLEEP_MINUTES: list[int] = [2, 45]  # in minutes

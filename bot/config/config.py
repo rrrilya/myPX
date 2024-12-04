@@ -32,6 +32,6 @@ class Settings(BaseSettings):
     COMPLETE_DANGER_TASKS: bool = False
     WATCH_ADS: bool = True
     USE_ALL_CHARGES: bool = True
-    RESELECT_TOURNAMENT_TEMPLATE: bool = False
+    RESELECT_TOURNAMENT_TEMPLATE: bool = True
 
 settings = Settings()  # type: ignore

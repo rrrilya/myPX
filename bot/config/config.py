@@ -33,5 +33,8 @@ class Settings(BaseSettings):
     WATCH_ADS: bool = True
     USE_ALL_CHARGES: bool = True
     RESELECT_TOURNAMENT_TEMPLATE: bool = True
+    CHECK_BOT_STATE: bool = True
+
+    SECRET_WORDS: list[str] = ["secretWord:example"]
 
 settings = Settings()  # type: ignore
